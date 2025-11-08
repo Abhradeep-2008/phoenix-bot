@@ -15,7 +15,8 @@ else:
 
 # --- INTENTS ---
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
 
 # --- HELPER FUNCTIONS ---
 def get_guild_config(guild_id):

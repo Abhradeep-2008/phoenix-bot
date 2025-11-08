@@ -1,7 +1,9 @@
 import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import json
+from collections import defaultdict
+import asyncio
 
 # --- CONFIG FILE ---
 CONFIG_FILE = "config.json"
@@ -13,17 +15,25 @@ if os.path.exists(CONFIG_FILE):
 else:
     config = {}
 
+# --- SPAM TRACKING ---
+message_counts = defaultdict(int)
+spam_limit = 5  # number of messages in interval
+spam_interval = 5  # seconds
+
 # --- INTENTS ---
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+# --- BOT INIT ---
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # --- HELPER FUNCTIONS ---
 def get_guild_config(guild_id):
     if str(guild_id) not in config:
         config[str(guild_id)] = {
             "welcome_channel": "general",
-            "mod_log_channel": "mod-log"
+            "mod_log_channel": "mod-log",
+            "auto_role": None,
+            "prefix": "!"
         }
         save_config()
     return config[str(guild_id)]
@@ -43,11 +53,43 @@ async def on_ready():
 @bot.event
 async def on_member_join(member):
     guild_config = get_guild_config(member.guild.id)
+    # Welcome message
     channel = get_channel(member.guild, guild_config["welcome_channel"])
     if channel:
         await channel.send(f"👋 Welcome {member.mention} to the server!")
+    # Auto role assignment
+    if guild_config["auto_role"]:
+        role = discord.utils.get(member.guild.roles, name=guild_config["auto_role"])
+        if role:
+            await member.add_roles(role)
 
-# --- MODERATION COMMANDS ---
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    # Spam detection
+    key = (message.guild.id, message.author.id)
+    message_counts[key] += 1
+    if message_counts[key] > spam_limit:
+        # Auto mute user
+        role = discord.utils.get(message.guild.roles, name="Muted")
+        if not role:
+            role = await message.guild.create_role(name="Muted")
+            for channel in message.guild.channels:
+                await channel.set_permissions(role, speak=False, send_messages=False)
+        await message.author.add_roles(role)
+        await message.channel.send(f"🔇 {message.author.mention} was muted for spamming!")
+        message_counts[key] = 0
+    await bot.process_commands(message)
+
+# Reset spam counts every interval
+@tasks.loop(seconds=spam_interval)
+async def reset_spam_counts():
+    message_counts.clear()
+
+reset_spam_counts.start()
+
+# --- MODERATION LOGGING ---
 async def log_action(ctx, action, member, reason=None):
     guild_config = get_guild_config(ctx.guild.id)
     log_channel = get_channel(ctx.guild, guild_config["mod_log_channel"])
@@ -59,6 +101,7 @@ async def log_action(ctx, action, member, reason=None):
             embed.add_field(name="Reason", value=reason, inline=False)
         await log_channel.send(embed=embed)
 
+# --- MODERATION COMMANDS ---
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason=None):
@@ -126,10 +169,26 @@ async def setmodlog(ctx, channel_name):
     save_config()
     await ctx.send(f"✅ Mod log channel set to #{channel_name}")
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setautorole(ctx, role_name):
+    guild_config = get_guild_config(ctx.guild.id)
+    guild_config["auto_role"] = role_name
+    save_config()
+    await ctx.send(f"✅ Auto role set to {role_name}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setprefix(ctx, prefix):
+    guild_config = get_guild_config(ctx.guild.id)
+    guild_config["prefix"] = prefix
+    save_config()
+    await ctx.send(f"✅ Command prefix set to {prefix}")
+
 # --- HELP COMMAND ---
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="PhoenixBot Commands", color=discord.Color.purple())
+    embed = discord.Embed(title="PhoenixBot Premium Commands", color=discord.Color.purple())
     embed.add_field(name="!kick @user [reason]", value="Kick a member", inline=False)
     embed.add_field(name="!ban @user [reason]", value="Ban a member", inline=False)
     embed.add_field(name="!mute @user", value="Mute a member", inline=False)
@@ -137,6 +196,8 @@ async def help(ctx):
     embed.add_field(name="!clear <number>", value="Delete messages", inline=False)
     embed.add_field(name="!setwelcome <channel>", value="Set welcome channel", inline=False)
     embed.add_field(name="!setmodlog <channel>", value="Set mod log channel", inline=False)
+    embed.add_field(name="!setautorole <role>", value="Set role assigned to new members", inline=False)
+    embed.add_field(name="!setprefix <prefix>", value="Set server command prefix", inline=False)
     await ctx.send(embed=embed)
 
 # --- RUN BOT ---

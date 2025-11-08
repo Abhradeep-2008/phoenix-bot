@@ -3,7 +3,6 @@ import discord
 from discord.ext import commands, tasks
 import json
 from collections import defaultdict
-import asyncio
 
 # --- CONFIG FILE ---
 CONFIG_FILE = "config.json"
@@ -17,7 +16,7 @@ else:
 
 # --- SPAM TRACKING ---
 message_counts = defaultdict(int)
-spam_limit = 5  # number of messages in interval
+spam_limit = 5  # messages in interval
 spam_interval = 5  # seconds
 
 # --- INTENTS ---
@@ -49,6 +48,7 @@ def get_channel(guild, name):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    reset_spam_counts.start()  # Start the anti-spam loop here
 
 @bot.event
 async def on_member_join(member):
@@ -82,12 +82,10 @@ async def on_message(message):
         message_counts[key] = 0
     await bot.process_commands(message)
 
-# Reset spam counts every interval
+# --- RESET SPAM COUNTS LOOP ---
 @tasks.loop(seconds=spam_interval)
 async def reset_spam_counts():
     message_counts.clear()
-
-reset_spam_counts.start()
 
 # --- MODERATION LOGGING ---
 async def log_action(ctx, action, member, reason=None):
